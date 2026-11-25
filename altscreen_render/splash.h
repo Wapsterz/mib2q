@@ -7,8 +7,9 @@
  * ALTR_SPLASH_FADE_US. Decoding carries on underneath, so the phone sees no
  * difference. It is drawn after the video in the same frame.
  *
- * GLES path only. The hardware decoder (hw_decode.c) blits straight into the
- * cluster window without GL and shows no splash. ALTR_SPLASH=0 turns it off.
+ * Two presenters: the GLES one (video_gles.c, on by default) and the hardware decoder's
+ * blitter (hw_decode.c, opt-in: marker file or ALTR_HW_SPLASH=1). ALTR_SPLASH=0 turns
+ * both off.
  *
  * Artwork: splash/splash.svg, rendered into splash_art.h by
  * tools/make_splash_art.py.
@@ -39,6 +40,17 @@ typedef struct altr_splash_layout {
 } altr_splash_layout_t;
 
 void altr_splash_layout(uint64_t elapsed_us, int win_w, int win_h, altr_splash_layout_t *out);
+
+/* Pre-rendered images for the blitter path (hw_decode.c), which has no GL. Pixels are
+ * 32-bit words 0xAARRGGBB (SCREEN_FORMAT_RGBA8888, the same layout as SCREEN_BLIT_COLOR),
+ * `stride` in bytes. The sheet is opaque: black with the artwork centred where
+ * altr_splash_layout puts it, WITHOUT the dot. Returns -1 when the window is too small for
+ * the artwork at full size (the blitter does not scale it); nothing is written then. */
+int altr_splash_render_sheet(uint8_t *dst, int stride, int win_w, int win_h);
+
+/* The dot, premultiplied alpha, in a ALTR_SPLASH_DOT_PX square centred on the disc. */
+#define ALTR_SPLASH_DOT_PX 16
+void altr_splash_render_dot(uint8_t *dst, int stride);
 
 typedef struct altr_splash altr_splash_t;
 

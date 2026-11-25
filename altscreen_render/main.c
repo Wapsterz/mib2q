@@ -55,8 +55,9 @@
  *   /mnt/app/root/altscreen_render.noasm (or /tmp/...) — FFmpeg's plain C code instead of its
  *                   ARM/NEON assembly (GEM "Software decoder plain C"). The renderer creates
  *                   the /tmp one itself after an illegal instruction, then restarts on C code
- *   ALTR_SPLASH     (default 1) — 0 = no "Navi Paslaugos" start-up splash. Software
- *                   (GLES) presenter only; the hardware decoder shows none
+ *   ALTR_SPLASH     (default 1) — 0 = no "Navi Paslaugos" start-up splash, on either
+ *                   presenter. The hardware decoder shows it only when opted in
+ *                   (ALTR_HW_SPLASH=1 or /mnt/app/root/altscreen_render.hwsplash)
  *   ALTR_KEYFRAME_GAP_MS (default 2000) — at most one key-frame request per this many ms
  *                   over the tee back-channel (one byte 'K' to the hook) when the decoder
  *                   reports a damaged picture

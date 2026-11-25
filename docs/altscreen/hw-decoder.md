@@ -192,12 +192,19 @@ Hung video hardware (issue #14):
 
 ## Start-up splash ("Navi Paslaugos")
 
-`altscreen_render/splash.c` draws an orbit spinner with the text "Navi Paslaugos" for about
+`altscreen_render/splash.c` shows an orbit spinner with the text "Navi Paslaugos" for about
 2.5 s at the start of each phone session, then fades into the picture over 0.4 s. Art:
 `altscreen_render/splash/splash.svg`, rendered into `splash_art.h` by
 `tools/make_splash_art.py` (needs `rsvg-convert`; the header is committed, so a normal
 build does not).
 
-It is drawn by the GLES presenter only. The hardware decoder blits straight into window 99
-without GL, so **with hardware decode on (the default) no splash is shown**; it appears on
-the software path, for example after *HW decoder OFF*. `ALTR_SPLASH=0` turns it off.
+- **Software (GLES) path:** on by default. `ALTR_SPLASH=0` turns it off.
+- **Hardware path (`hw_decode.c`), opt-in:** two pre-rendered RGBA images in hidden windows
+  are blitted over each picture with `screen_blit` (source-over, global alpha for the fade),
+  just before the post. Turn it on with the marker file
+  `/mnt/app/root/altscreen_render.hwsplash` or `ALTR_HW_SPLASH=1`; `ALTR_SPLASH=0` always
+  wins. It needs a window of at least 300x176 (the blitter does not scale it). Any failed
+  blit or window only ends the splash, never the picture. Untested on a unit: it has only
+  been checked against the screen headers and on the host (pixel layout in `splash.c`).
+  Things to look at in a log: `hw_decode: splash shown` / `splash done`, and
+  `splash blit failed errno=...` if the unit's libscreen refuses the alpha blit.

@@ -1,6 +1,7 @@
 /* Splash timing and geometry (altscreen_render/splash.c, the GL-free part). */
 #include <math.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <string.h>
 
 #include "splash.h"
@@ -48,6 +49,48 @@ int main(void)
         CHECK(near(L.cx, cx0) && near(L.cy, cy0));
     }
     CHECK(near(L.r, SPLASH_DOT));
+
+    /* Pre-rendered images for the blitter path. */
+    {
+        enum { W = 1440, H = 540 };
+        static uint8_t sheet[W * H * 4], dot[ALTR_SPLASH_DOT_PX * ALTR_SPLASH_DOT_PX * 4];
+        const uint32_t *px = (const uint32_t *)(const void *)sheet;
+        const uint32_t *dp = (const uint32_t *)(const void *)dot;
+        int ox, oy, i;
+        altr_splash_layout(0, W, H, &L);
+        ox = (int)(L.x0 + 0.5f); oy = (int)(L.y0 + 0.5f);
+        CHECK(altr_splash_render_sheet(sheet, W * 4, W, H) == 0);
+        CHECK(px[0] == 0xFF000000u && px[W * H - 1] == 0xFF000000u);   /* black, opaque */
+        for (i = 0; i < W * H; ++i) {
+            CHECK((px[i] >> 24) == 0xFF);                              /* never transparent */
+        }
+        {   /* some artwork is lit, and only inside its rectangle */
+            int x, y, inside = 0, outside = 0;
+            for (y = 0; y < H; ++y)
+                for (x = 0; x < W; ++x)
+                    if (px[y * W + x] & 0xFFFFFF) {
+                        if (x >= ox && x < ox + SPLASH_W && y >= oy && y < oy + SPLASH_H) inside++;
+                        else outside++;
+                    }
+            CHECK(inside > 500 && outside == 0);
+        }
+        /* too small for the artwork at full size: refused, buffer untouched */
+        memset(sheet, 0x7F, 64);
+        CHECK(altr_splash_render_sheet(sheet, 200 * 4, 200, 100) == -1 && sheet[0] == 0x7F);
+        CHECK(altr_splash_render_sheet(sheet, 100, W, H) == -1);       /* stride too small */
+
+        altr_splash_render_dot(dot, ALTR_SPLASH_DOT_PX * 4);
+        {   /* centre solid #5DCAA5, corner clear, premultiplied (rgb never above alpha) */
+            uint32_t m = dp[(ALTR_SPLASH_DOT_PX / 2) * ALTR_SPLASH_DOT_PX + ALTR_SPLASH_DOT_PX / 2];
+            int j;
+            CHECK(m == 0xFF5DCAA5u);
+            CHECK(dp[0] == 0u);
+            for (j = 0; j < ALTR_SPLASH_DOT_PX * ALTR_SPLASH_DOT_PX; ++j) {
+                unsigned a = dp[j] >> 24;
+                CHECK(((dp[j] >> 16) & 255u) <= a && ((dp[j] >> 8) & 255u) <= a && (dp[j] & 255u) <= a);
+            }
+        }
+    }
 
     /* Host build: no GL, so no splash object. */
     CHECK(altr_splash_create() == NULL);

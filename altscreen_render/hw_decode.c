@@ -24,6 +24,7 @@
  */
 #include "hw_decode.h"
 #include "nal.h"
+#include "splash.h"
 
 #ifdef PLATFORM_QNX
 
@@ -85,6 +86,13 @@ struct altr_hwdec {
     volatile int grid;          /* calibration ruler over each picture (main loop sets it) */
     int grid_failed_logged;
     volatile unsigned damaged;  /* damaged access units the decoder reported (keyframe requests) */
+
+    /* Start-up splash (splash.h) over the first pictures, by the 2D blitter: two pre-rendered
+     * RGBA images in hidden windows used only as blit sources. Opt-in, see splash_wanted. */
+    int splash_state;           /* 0 = not set up yet, 1 = running, 2 = off or finished */
+    screen_window_t sp_sheet_win, sp_dot_win;
+    screen_buffer_t sp_sheet, sp_dot;
+    uint64_t splash_start_us;   /* 0 until the first picture it was drawn over */
 
     AVCodecContext *pctx;
     AVCodecParserContext *parser;
@@ -192,6 +200,137 @@ static void draw_grid(altr_hwdec_t *d, screen_buffer_t dst)
     }
 }
 
+/* ---- start-up splash (opt-in; blitter only) ---- */
+
+#define HW_SPLASH_MARKER "/mnt/app/root/altscreen_render.hwsplash"
+
+/* On with ALTR_HW_SPLASH=1 or the marker file; ALTR_SPLASH=0 always turns it off. Off by
+ * default: it needs libscreen blit alpha, which nothing else in the renderer uses, and it
+ * has only run through the blitter code on the host's stand-in headers. */
+static int splash_wanted(void)
+{
+    const char *e = getenv("ALTR_SPLASH");
+    if (e && *e && atoi(e) == 0) return 0;
+    e = getenv("ALTR_HW_SPLASH");
+    if (e && *e) return atoi(e) != 0;
+    return access(HW_SPLASH_MARKER, F_OK) == 0;
+}
+
+static uint64_t splash_now_us(void)
+{
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (uint64_t)t.tv_sec * 1000000u + (uint64_t)(t.tv_nsec / 1000L);
+}
+
+/* A hidden RGBA window with one CPU-mapped buffer, the way the decode window is made. */
+static int splash_image(altr_hwdec_t *d, screen_window_t *win, screen_buffer_t *buf, int w, int h,
+                        uint8_t **ptr, int *stride)
+{
+    int fmt = 8, usage = 0x0E, size[2] = { w, h }, hidden = 0;   /* RGBA8888; NATIVE|WRITE|READ */
+    screen_buffer_t b[2] = { NULL, NULL };
+    void *p = NULL;
+    *stride = 0;
+    if (screen_create_window(win, d->sctx) != 0 ||
+        screen_set_window_property_iv(*win, SCREEN_PROPERTY_FORMAT, &fmt) != 0 ||
+        screen_set_window_property_iv(*win, SCREEN_PROPERTY_USAGE, &usage) != 0 ||
+        screen_set_window_property_iv(*win, SCREEN_PROPERTY_SIZE, size) != 0 ||
+        screen_set_window_property_iv(*win, SCREEN_PROPERTY_BUFFER_SIZE, size) != 0 ||
+        screen_set_window_property_iv(*win, SCREEN_PROPERTY_VISIBLE, &hidden) != 0 ||
+        screen_create_window_buffers(*win, 1) != 0 ||
+        screen_get_window_property_pv(*win, SCREEN_PROPERTY_RENDER_BUFFERS, (void **)b) != 0 || !b[0] ||
+        screen_get_buffer_property_pv(b[0], SCREEN_PROPERTY_POINTER, &p) != 0 || !p ||
+        screen_get_buffer_property_iv(b[0], SCREEN_PROPERTY_STRIDE, stride) != 0 || *stride < w * 4)
+        return -1;
+    *buf = b[0];
+    *ptr = (uint8_t *)p;
+    return 0;
+}
+
+static void splash_release(altr_hwdec_t *d)
+{
+    if (d->sp_sheet_win) { screen_destroy_window(d->sp_sheet_win); d->sp_sheet_win = NULL; }
+    if (d->sp_dot_win) { screen_destroy_window(d->sp_dot_win); d->sp_dot_win = NULL; }
+    d->sp_sheet = d->sp_dot = NULL;
+}
+
+/* Any failure only ends the splash: the picture was already blitted and is posted either way. */
+static void splash_off(altr_hwdec_t *d, const char *why)
+{
+    fprintf(stderr, "hw_decode: splash %s\n", why);
+    d->splash_state = 2;
+}
+
+static int splash_prepare(altr_hwdec_t *d)
+{
+    uint8_t *sp = NULL, *dp = NULL;
+    int sstride = 0, dstride = 0;
+    if (splash_image(d, &d->sp_sheet_win, &d->sp_sheet, d->view.view_w, d->view.view_h, &sp, &sstride) != 0 ||
+        splash_image(d, &d->sp_dot_win, &d->sp_dot, ALTR_SPLASH_DOT_PX, ALTR_SPLASH_DOT_PX, &dp, &dstride) != 0) {
+        fprintf(stderr, "hw_decode: splash images failed errno=%d (no splash)\n", errno);
+        splash_release(d);
+        return -1;
+    }
+    if (altr_splash_render_sheet(sp, sstride, d->view.view_w, d->view.view_h) != 0) {
+        fprintf(stderr, "hw_decode: window %dx%d too small for the splash (no splash)\n",
+                d->view.view_w, d->view.view_h);
+        splash_release(d);
+        return -1;
+    }
+    altr_splash_render_dot(dp, dstride);
+    return 0;
+}
+
+/* After the picture is blitted into dst and before it is posted. */
+static void splash_draw(altr_hwdec_t *d, screen_buffer_t dst)
+{
+    altr_splash_layout_t L;
+    uint64_t now;
+    int dx, dy, alpha;
+    if (d->splash_state == 2) return;
+    if (d->splash_state == 0) {
+        if (splash_prepare(d) != 0) { d->splash_state = 2; return; }
+        d->splash_state = 1;
+    }
+    now = splash_now_us();
+    if (!d->splash_start_us) {
+        d->splash_start_us = now;
+        fprintf(stderr, "hw_decode: splash shown\n");
+    }
+    altr_splash_layout(now - d->splash_start_us, d->view.view_w, d->view.view_h, &L);
+    if (L.done) { splash_off(d, "done"); splash_release(d); return; }
+    alpha = (int)(L.alpha * 255.0f + 0.5f);
+    dx = (int)(L.cx - ALTR_SPLASH_DOT_PX / 2.0f + 0.5f);
+    dy = (int)(L.cy - ALTR_SPLASH_DOT_PX / 2.0f + 0.5f);
+    {
+        int sheet[] = {
+            SCREEN_BLIT_SOURCE_X, 0, SCREEN_BLIT_SOURCE_Y, 0,
+            SCREEN_BLIT_SOURCE_WIDTH, d->view.view_w, SCREEN_BLIT_SOURCE_HEIGHT, d->view.view_h,
+            SCREEN_BLIT_DESTINATION_X, 0, SCREEN_BLIT_DESTINATION_Y, 0,
+            SCREEN_BLIT_DESTINATION_WIDTH, d->view.view_w, SCREEN_BLIT_DESTINATION_HEIGHT, d->view.view_h,
+            SCREEN_BLIT_GLOBAL_ALPHA, alpha, SCREEN_BLIT_TRANSPARENCY, SCREEN_TRANSPARENCY_SOURCE_OVER,
+            SCREEN_BLIT_END
+        };
+        int dot[] = {
+            SCREEN_BLIT_SOURCE_X, 0, SCREEN_BLIT_SOURCE_Y, 0,
+            SCREEN_BLIT_SOURCE_WIDTH, ALTR_SPLASH_DOT_PX, SCREEN_BLIT_SOURCE_HEIGHT, ALTR_SPLASH_DOT_PX,
+            SCREEN_BLIT_DESTINATION_X, dx, SCREEN_BLIT_DESTINATION_Y, dy,
+            SCREEN_BLIT_DESTINATION_WIDTH, ALTR_SPLASH_DOT_PX, SCREEN_BLIT_DESTINATION_HEIGHT, ALTR_SPLASH_DOT_PX,
+            SCREEN_BLIT_GLOBAL_ALPHA, alpha, SCREEN_BLIT_TRANSPARENCY, SCREEN_TRANSPARENCY_SOURCE_OVER,
+            SCREEN_BLIT_END
+        };
+        if (screen_blit(d->sctx, dst, d->sp_sheet, sheet) != 0) {
+            fprintf(stderr, "hw_decode: splash blit failed errno=%d\n", errno);
+            splash_off(d, "off (blit refused)");
+            splash_release(d);
+        } else if (screen_blit(d->sctx, dst, d->sp_dot, dot) != 0) {
+            fprintf(stderr, "hw_decode: splash dot blit failed errno=%d\n", errno);
+            splash_off(d, "off (blit refused)");
+            splash_release(d);
+        }
+    }
+}
+
 static OMX_ERRORTYPE on_fill_done(OMX_HANDLETYPE h, void *app, OMX_BUFFERHEADERTYPE *b)
 {
     altr_hwdec_t *d = (altr_hwdec_t *)app;
@@ -233,6 +372,7 @@ static OMX_ERRORTYPE on_fill_done(OMX_HANDLETYPE h, void *app, OMX_BUFFERHEADERT
                     errno);
             d->failed = 1;
         } else {
+            splash_draw(d, dst[0]);
             if (d->grid) draw_grid(d, dst[0]);
             if (screen_post_window(d->win, dst[0], 1, rect, SCREEN_WAIT_IDLE) != 0) {
                 fprintf(stderr, "hw_decode: screen_post_window failed errno=%d\n", errno);
@@ -646,6 +786,7 @@ altr_hwdec_t *altr_hwdec_create(const altr_view_t *view, int displayable_id, int
         }
         pthread_condattr_destroy(&ca);
     }
+    d->splash_state = splash_wanted() ? 0 : 2;
     hw_session_reset(d);
 
     /*
@@ -744,6 +885,7 @@ int altr_hwdec_destroy(altr_hwdec_t *d)
 {
     if (!d) return 0;
     if (hw_session_close(d) != 0) return -1;
+    splash_release(d);
     if (d->cs) cluster_surface_destroy(d->cs);
     pthread_cond_destroy(&d->cond);
     pthread_mutex_destroy(&d->lock);

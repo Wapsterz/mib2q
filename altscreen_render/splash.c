@@ -32,11 +32,59 @@ void altr_splash_layout(uint64_t elapsed_us, int win_w, int win_h, altr_splash_l
     out->r = SPLASH_DOT * scale;
 }
 
+/* kSplashArt: only splash.c holds the artwork. */
+#include "splash_art.h"
+
+int altr_splash_render_sheet(uint8_t *dst, int stride, int win_w, int win_h)
+{
+    altr_splash_layout_t L;
+    int x, y, ox, oy;
+    if (!dst || stride < win_w * 4 || win_w <= 0 || win_h <= 0) return -1;
+    altr_splash_layout(0, win_w, win_h, &L);
+    if (L.dw < SPLASH_W - 0.01f || L.dh < SPLASH_H - 0.01f) return -1;
+    ox = (int)(L.x0 + 0.5f);
+    oy = (int)(L.y0 + 0.5f);
+    for (y = 0; y < win_h; ++y) {
+        uint32_t *row = (uint32_t *)(void *)(dst + (size_t)y * (size_t)stride);
+        for (x = 0; x < win_w; ++x) row[x] = 0xFF000000u;
+    }
+    for (y = 0; y < SPLASH_H; ++y) {
+        uint32_t *row = (uint32_t *)(void *)(dst + (size_t)(oy + y) * (size_t)stride);
+        for (x = 0; x < SPLASH_W; ++x) {
+            const unsigned char *p = kSplashArt + ((size_t)y * SPLASH_W + (size_t)x) * 4;
+            unsigned a = p[3];
+            /* straight-alpha art over opaque black */
+            row[ox + x] = 0xFF000000u | (((p[0] * a + 127u) / 255u) << 16)
+                                      | (((p[1] * a + 127u) / 255u) << 8)
+                                      |  ((p[2] * a + 127u) / 255u);
+        }
+    }
+    return 0;
+}
+
+void altr_splash_render_dot(uint8_t *dst, int stride)
+{
+    const float c = ALTR_SPLASH_DOT_PX / 2.0f;
+    int x, y;
+    for (y = 0; y < ALTR_SPLASH_DOT_PX; ++y) {
+        uint32_t *row = (uint32_t *)(void *)(dst + (size_t)y * (size_t)stride);
+        for (x = 0; x < ALTR_SPLASH_DOT_PX; ++x) {
+            float dx = x + 0.5f - c, dy = y + 0.5f - c;
+            float a = SPLASH_DOT - sqrtf(dx * dx + dy * dy) + 0.5f;
+            unsigned ai;
+            a = a < 0.0f ? 0.0f : a > 1.0f ? 1.0f : a;
+            ai = (unsigned)(a * 255.0f + 0.5f);
+            /* #5DCAA5, premultiplied */
+            row[x] = (ai << 24) | (((0x5Du * ai + 127u) / 255u) << 16)
+                                | (((0xCAu * ai + 127u) / 255u) << 8)
+                                |  ((0xA5u * ai + 127u) / 255u);
+        }
+    }
+}
+
 #ifdef PLATFORM_QNX
 
 #include <GLES2/gl2.h>
-
-#include "splash_art.h"      /* kSplashArt */
 
 #define SPLASH_DOT_TEX 32
 #define SPLASH_UNIT 3        /* texture units 0..2 hold the video planes */
