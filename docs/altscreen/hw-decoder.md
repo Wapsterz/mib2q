@@ -189,3 +189,15 @@ Hung video hardware (issue #14):
    buffer. Behind a marker, FFmpeg stays the fallback.
 3. Remaining stock details to read when needed: `CScreenRender::config` (window property
    sequence), `COMXVideoDecoder::configure/setOutputBuffers/parseHeaderFrame`.
+
+## Start-up splash ("Navi Paslaugos")
+
+`altscreen_render/splash.c` draws an orbit spinner with the text "Navi Paslaugos" for about
+2.5 s at the start of each phone session, then fades into the picture over 0.4 s. Art:
+`altscreen_render/splash/splash.svg`, rendered into `splash_art.h` by
+`tools/make_splash_art.py` (needs `rsvg-convert`; the header is committed, so a normal
+build does not).
+
+It is drawn by the GLES presenter only. The hardware decoder blits straight into window 99
+without GL, so **with hardware decode on (the default) no splash is shown**; it appears on
+the software path, for example after *HW decoder OFF*. `ALTR_SPLASH=0` turns it off.

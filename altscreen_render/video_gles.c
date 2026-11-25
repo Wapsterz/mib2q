@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #include "video_gles.h"
+#include "splash.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,6 +29,7 @@ struct altr_gles {
     size_t packYcap, packUcap, packVcap;
     GLint aPos, aTex, uY, uU, uV, uLuma, uChroma;
     int matrix_cs, matrix_full;   /* matrix last loaded, -1 = none */
+    altr_splash_t *splash;        /* NULL = no splash */
 };
 
 static const char *VS =
@@ -120,6 +122,7 @@ altr_gles_t *altr_gles_create(int surface_w, int surface_h)
 
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_BLEND);
+    g->splash = NULL;          /* altr_gles_set_splash turns it on */
     return g;
 }
 
@@ -233,6 +236,21 @@ void altr_gles_draw_grid(altr_gles_t *g)
     glDisable(GL_SCISSOR_TEST);
 }
 
+/* Start-up splash (splash.h): on creates it once, off frees it. A failed create leaves it off. */
+void altr_gles_set_splash(altr_gles_t *g, int on)
+{
+    if (!g) return;
+    if (on && !g->splash) g->splash = altr_splash_create();
+    else if (!on && g->splash) { altr_splash_destroy(g->splash); g->splash = NULL; }
+}
+
+void altr_gles_splash_restart(altr_gles_t *g) { if (g) altr_splash_restart(g->splash); }
+
+void altr_gles_draw_splash(altr_gles_t *g)
+{
+    if (g && g->splash) altr_splash_draw(g->splash, g->sw, g->sh);
+}
+
 void altr_gles_resize(altr_gles_t *g, int w, int h){ if (g){ g->sw=w; g->sh=h; } }
 
 void altr_gles_destroy(altr_gles_t *g)
@@ -242,6 +260,7 @@ void altr_gles_destroy(altr_gles_t *g)
     if (g->texU) glDeleteTextures(1, &g->texU);
     if (g->texV) glDeleteTextures(1, &g->texV);
     if (g->prog) glDeleteProgram(g->prog);
+    altr_splash_destroy(g->splash);
     free(g->packY);
     free(g->packU);
     free(g->packV);
@@ -254,6 +273,9 @@ struct altr_gles { int sw, sh; };
 altr_gles_t *altr_gles_create(int w, int h){ (void)w;(void)h; return NULL; }
 int altr_gles_draw(altr_gles_t *g, const altr_frame_t *f){ (void)g;(void)f; return -1; }
 void altr_gles_draw_grid(altr_gles_t *g){ (void)g; }
+void altr_gles_set_splash(altr_gles_t *g, int on){ (void)g;(void)on; }
+void altr_gles_splash_restart(altr_gles_t *g){ (void)g; }
+void altr_gles_draw_splash(altr_gles_t *g){ (void)g; }
 void altr_gles_resize(altr_gles_t *g, int w, int h){ (void)g;(void)w;(void)h; }
 void altr_gles_destroy(altr_gles_t *g){ (void)g; }
 

@@ -135,6 +135,12 @@ cc -std=gnu99 -O2 -Wall -Wextra -Werror -pedantic -Ialtscreen_render \
     tests/altscreen_view_test.c altscreen_render/view.c -lm -o "$OUT/altscreen_view"
 "$OUT/altscreen_view"
 
+printf '%-32s ' altscreen_splash_test
+# Start-up splash timing and geometry (the GL-free part).
+cc -std=gnu99 -O1 -Wall -Wextra -Werror -pedantic -Ialtscreen_render \
+    tests/altscreen_splash_test.c altscreen_render/splash.c -lm -o "$OUT/altscreen_splash"
+"$OUT/altscreen_splash"
+
 printf '%-32s ' altscreen_policy_test
 # Renderer session decisions: bounded hardware starts, yield stamp, hang-only persistence,
 # key-frame pacing, frozen picture on a new connection.

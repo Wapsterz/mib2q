@@ -30,6 +30,15 @@ int altr_gles_draw(altr_gles_t *g, const altr_frame_t *f);
  * magenta 420, white 480), grey verticals every 180 px and a grey canvas border. */
 void altr_gles_draw_grid(altr_gles_t *g);
 
+/* Start-up splash ("Navi Paslaugos", splash.h). set_splash(1) creates it (needs the GL
+ * context), set_splash(0) frees it. splash_restart makes the next draw_splash start from
+ * the beginning (call it when a phone session starts). draw_splash goes after
+ * altr_gles_draw and before the buffer swap; it does nothing once the splash has
+ * finished or when it is off. */
+void altr_gles_set_splash(altr_gles_t *g, int on);
+void altr_gles_splash_restart(altr_gles_t *g);
+void altr_gles_draw_splash(altr_gles_t *g);
+
 /* Update the drawable size after a window recreate. */
 void altr_gles_resize(altr_gles_t *g, int surface_w, int surface_h);
 

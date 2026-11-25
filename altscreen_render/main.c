@@ -55,6 +55,8 @@
  *   /mnt/app/root/altscreen_render.noasm (or /tmp/...) — FFmpeg's plain C code instead of its
  *                   ARM/NEON assembly (GEM "Software decoder plain C"). The renderer creates
  *                   the /tmp one itself after an illegal instruction, then restarts on C code
+ *   ALTR_SPLASH     (default 1) — 0 = no "Navi Paslaugos" start-up splash. Software
+ *                   (GLES) presenter only; the hardware decoder shows none
  *   ALTR_KEYFRAME_GAP_MS (default 2000) — at most one key-frame request per this many ms
  *                   over the tee back-channel (one byte 'K' to the hook) when the decoder
  *                   reports a damaged picture
@@ -264,6 +266,8 @@ struct app {
     cluster_surface_t *cs;
     int have_gl;
     int egl_ready;
+    int splash_on;            /* ALTR_SPLASH */
+    int splash_restart;       /* a new phone session: the splash starts again at the next picture */
     uint64_t last_probe_ms;   /* throttle for cluster_surface_lost() */
     int probe_now;            /* force a probe after a failed present */
     int disp_id;              /* displayable (99) */
@@ -410,6 +414,7 @@ static int gl_init(struct app *a, int displayable_id)
     eglSwapInterval(a->dpy, 1);
     a->gl = altr_gles_create(a->surface_w, a->surface_h);
     if (!a->gl) { fprintf(stderr, "altscreen_render: gles create failed\n"); return -1; }
+    altr_gles_set_splash(a->gl, a->splash_on);
     a->have_gl = 1;
     fprintf(stderr, "altscreen_render: GL up on displayable %d %dx%d (EGL %d.%d)\n",
             displayable_id, a->surface_w, a->surface_h, maj, min);
@@ -476,6 +481,8 @@ static int present_frame(struct app *a, const altr_frame_t *f)
     if (lost && rebind_window(a) != 0) { a->probe_now = 1; return -1; }
     if (altr_gles_draw(a->gl, f) != 0)  { a->probe_now = 1; return -1; }
     if (grid_enabled(now)) altr_gles_draw_grid(a->gl);
+    if (a->splash_restart) { altr_gles_splash_restart(a->gl); a->splash_restart = 0; }
+    altr_gles_draw_splash(a->gl);
     if (!eglSwapBuffers(a->dpy, a->surf)) { a->probe_now = 1; return -1; }
     return 0;
 }
@@ -925,6 +932,7 @@ int main(void)
     a.surf = EGL_NO_SURFACE;
     a.ctx = EGL_NO_CONTEXT;
     a.disp_id = env_i("ALTR_DISPLAYABLE_ID", 99);
+    a.splash_on = env_i("ALTR_SPLASH", 1) != 0;
     {
         int s = env_i("ALTR_HW_MIN_UPTIME_S", 120);
         a.hw_min_uptime_ms = s > 0 ? (uint64_t)s * 1000u : 0;   /* CLOCK_MONOTONIC = uptime on QNX */
@@ -1003,6 +1011,9 @@ int main(void)
             hw_unfreeze(&a, 1);
 #endif
         a.src = s;
+#ifdef PLATFORM_QNX
+        a.splash_restart = 1;
+#endif
         a.last_shown_ms = 0;
         a.tee_fd = fd;
         a.keyframe_ms = 0;
