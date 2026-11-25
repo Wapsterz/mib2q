@@ -1,0 +1,70 @@
+name: Build altscreen_render
+
+# Cross-builds only the cluster video renderer (the part the "Navi Paslaugos" splash lives in)
+# for QNX 6.5 ARMv7. It needs just the public toolchain image, no stock HMI jar, so it can run
+# here. The binary is uploaded as a workflow artifact; copy it over `altscreen_render` in a
+# matching release's SD-CARD/carplay/ folder.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [navi-paslaugos-splash]
+    paths:
+      - altscreen_render/**
+      - common/**
+      - scripts/build_altscreen_render.sh
+      - .github/workflows/build-altscreen-render.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-altscreen-render-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      # The SDP inside the image holds about 150 symlinks; a checkout that turns them into
+      # text files fails late, in ar. Linux checkout keeps them.
+      - uses: actions/checkout@v4
+        with:
+          repository: luka-dev/qnx65-armv7-toolchain
+          path: toolchain-src
+
+      - run: git -C toolchain-src config core.symlinks
+
+      - uses: docker/setup-buildx-action@v3
+
+      # First run: 30-60 minutes. Later runs reuse the layer cache.
+      - name: Toolchain image
+        uses: docker/build-push-action@v6
+        with:
+          context: toolchain-src
+          target: base-env
+          build-args: BASE=base-8.5
+          platforms: linux/amd64
+          tags: qnx65-armv7-toolchain:latest
+          load: true
+          cache-from: type=gha,scope=qnx65
+          cache-to: type=gha,mode=max,scope=qnx65
+
+      - name: Build altscreen_render
+        run: |
+          mkdir -p build
+          bash scripts/build_altscreen_render.sh
+          ls -l build/altscreen_render
+          file build/altscreen_render || true
+          sha256sum build/altscreen_render | tee build/altscreen_render.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: altscreen_render-qnx65-armv7
+          path: |
+            build/altscreen_render
+            build/altscreen_render.sha256
+          if-no-files-found: error
