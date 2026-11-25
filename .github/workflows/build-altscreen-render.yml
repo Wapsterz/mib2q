@@ -36,7 +36,8 @@ jobs:
           repository: luka-dev/qnx65-armv7-toolchain
           path: toolchain-src
 
-      - run: git -C toolchain-src config core.symlinks
+      # `git config` exits 1 when the key is unset (the Linux default), which is fine.
+      - run: test "$(git -C toolchain-src config core.symlinks || echo true)" != false
 
       - uses: docker/setup-buildx-action@v3
 
